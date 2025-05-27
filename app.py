@@ -93,7 +93,7 @@ def assess_skin_image(image):
             logger.info("Successfully received API response")
             logger.info(f"Response type: {type(response)}")
             logger.info(f"Response content: {response.choices[0].message.content[:100]}...")
-            
+
             reply = response.choices[0].message.content
             
             # Determine risk level
@@ -127,7 +127,6 @@ def generate_pdf_report(image, risk_level, explanation):
         os.makedirs(folder, exist_ok=True)
         filepath = os.path.join(folder, filename)
 
-        # Create PDF with UTF-8 support
         pdf = FPDF()
         pdf.add_page()
         
@@ -135,7 +134,7 @@ def generate_pdf_report(image, risk_level, explanation):
         pdf.set_font("Arial", 'B', 16)
         pdf.cell(200, 10, txt="AI Skin Monitoring Report", ln=True, align='C')
         
-        # Add content with UTF-8 encoding
+        # Add content
         pdf.set_font("Arial", size=12)
         pdf.ln(10)
         pdf.cell(200, 10, txt=f"Date: {now.strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
@@ -146,12 +145,10 @@ def generate_pdf_report(image, risk_level, explanation):
         pdf.cell(200, 10, txt=f"Risk Level: {risk_level}", ln=True)
         pdf.ln(5)
         
-        # Explanation - handle Unicode characters
+        # Explanation
         pdf.set_font("Arial", size=12)
-        # Split explanation into lines to handle long text
         lines = explanation.split('\n')
         for line in lines:
-            # Replace any problematic characters
             safe_line = line.encode('latin-1', 'replace').decode('latin-1')
             pdf.multi_cell(0, 10, txt=safe_line)
         pdf.ln(10)

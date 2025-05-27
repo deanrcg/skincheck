@@ -1,0 +1,168 @@
+import gradio as gr
+from PIL import Image
+from openai import OpenAI
+from fpdf import FPDF
+import os
+import datetime
+import base64
+import io
+from dotenv import load_dotenv
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv()
+
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+if not os.getenv("OPENAI_API_KEY"):
+    raise ValueError("Please set the OPENAI_API_KEY environment variable")
+
+def assess_skin_image(image):
+    try:
+        # Verify image is valid
+        if not isinstance(image, Image.Image):
+            raise ValueError("Invalid image format. Please upload a valid image file.")
+        
+        # Log image details
+        logger.info(f"Image format: {image.format}, Size: {image.size}, Mode: {image.mode}")
+        
+        # Convert image to RGB if it's not already
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+            logger.info("Converted image to RGB mode")
+
+        # Convert image to base64
+        buffered = io.BytesIO()
+        image.save(buffered, format="JPEG", quality=95)
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        logger.info(f"Image converted to base64, length: {len(img_str)}")
+
+        # Prepare the API request
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful medical assistant. This tool is not for diagnosis but helps users understand if a mole or skin lesion may need medical attention. Focus on the ABCDE criteria (Asymmetry, Border irregularity, Color variation, Diameter >6mm, Evolution) in your assessment."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Please review this image and assess whether the mole or lesion shows any risk signs. Consider the ABCDE criteria. Categorize it as low, medium, or high risk, and explain why."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{img_str}",
+                            "detail": "high"
+                        }
+                    }
+                ]
+            }
+        ]
+
+        logger.info("Sending request to OpenAI API...")
+        
+        # GPT-4 Vision API call using new client format
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=500
+        )
+
+        logger.info("Received response from OpenAI API")
+        
+        reply = response.choices[0].message.content
+        logger.info(f"API Response: {reply[:100]}...")  # Log first 100 chars of response
+        
+        # Determine risk level based on the response
+        risk_level = "Medium Risk - Monitor"  # Default fallback
+        reply_lower = reply.lower()
+        if "low" in reply_lower and "high" not in reply_lower:
+            risk_level = "Low Risk - Likely Benign"
+        elif "high" in reply_lower:
+            risk_level = "High Risk - Seek Medical Advice"
+
+        report_path = generate_pdf_report(image, risk_level, reply)
+        return risk_level, reply, report_path
+
+    except Exception as e:
+        error_message = f"An error occurred during analysis: {str(e)}"
+        logger.error(f"Error in assess_skin_image: {str(e)}", exc_info=True)
+        return "Error", error_message, None
+
+def generate_pdf_report(image, risk_level, explanation):
+    try:
+        now = datetime.datetime.now()
+        filename = f"Skin_Report_{now.strftime('%Y%m%d_%H%M%S')}.pdf"
+        folder = "reports"
+        os.makedirs(folder, exist_ok=True)
+        filepath = os.path.join(folder, filename)
+
+        pdf = FPDF()
+        pdf.add_page()
+        
+        # Add title
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(200, 10, txt="AI Skin Monitoring Report", ln=True, align='C')
+        
+        # Add content
+        pdf.set_font("Arial", size=12)
+        pdf.ln(10)
+        pdf.cell(200, 10, txt=f"Date: {now.strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
+        pdf.ln(5)
+        
+        # Risk level with color coding
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(200, 10, txt=f"Risk Level: {risk_level}", ln=True)
+        pdf.ln(5)
+        
+        # Explanation
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 10, txt=f"Explanation: {explanation}")
+        pdf.ln(10)
+
+        # Save and add image
+        temp_img_path = os.path.join(folder, "temp_image.jpg")
+        image.save(temp_img_path)
+        pdf.image(temp_img_path, x=10, w=100)
+        
+        # Add disclaimer
+        pdf.ln(10)
+        pdf.set_font("Arial", 'I', 10)
+        pdf.multi_cell(0, 10, txt="Disclaimer: This report is generated by AI and is not a medical diagnosis. Please consult a healthcare professional for medical advice.")
+        
+        pdf.output(filepath)
+        
+        # Clean up temporary image
+        os.remove(temp_img_path)
+        
+        return filepath
+
+    except Exception as e:
+        print(f"Error generating PDF: {str(e)}")
+        return None
+
+# Gradio interface
+iface = gr.Interface(
+    fn=assess_skin_image,
+    inputs=gr.Image(type="pil", label="Upload a photo of your skin lesion"),
+    outputs=[
+        gr.Text(label="Risk Assessment"),
+        gr.Text(label="Explanation"),
+        gr.File(label="Download PDF Report")
+    ],
+    title="AI Skin Monitoring with GPT-4 Vision",
+    description="Upload a skin photo to receive an AI-generated risk assessment and PDF report. Not a diagnosis — consult a healthcare professional for medical concerns.",
+    examples=[
+        ["example_images/example1.jpg"] if os.path.exists("example_images/example1.jpg") else None
+    ],
+    theme=gr.themes.Soft()
+)
+
+if __name__ == "__main__":
+    iface.launch(share=False) 
